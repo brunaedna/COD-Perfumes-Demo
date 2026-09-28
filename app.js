@@ -16,6 +16,10 @@ import {
   splitMessages as splitImportedMessages,
 } from "./message-parser.js";
 import { bindExtensionBridge as bindWhatsAppExtensionBridge } from "./extension-bridge.js";
+import {
+  calculateCourierStockBalances,
+  planSaleFulfillmentForState,
+} from "./inventory-engine.js";
 
 const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
@@ -1267,50 +1271,7 @@ function isDateInside(date, startDate, endDate) {
 }
 
 function courierStockBalances() {
-  const balances = new Map();
-
-  const ensure = (delivererId, productId) => {
-    const key = `${delivererId}|${productId}`;
-    if (!balances.has(key)) {
-      const deliverer = byId(state.people, delivererId);
-      const product = byId(state.products, productId);
-      balances.set(key, {
-        delivererId,
-        productId,
-        delivererName: deliverer?.name || "Entregador removido",
-        productName: product?.name || "Produto removido",
-        out: 0,
-        returned: 0,
-        sold: 0,
-        balance: 0,
-      });
-    }
-    return balances.get(key);
-  };
-
-  state.stockTransfers.forEach((entry) => {
-    const row = ensure(entry.delivererId, entry.productId);
-    if (entry.type === "Devolucao") row.returned += Number(entry.quantity || 0);
-    else row.out += Number(entry.quantity || 0);
-  });
-
-  state.sales
-    .filter((sale) => sale.status !== "Cancelada" && sale.delivererId)
-    .forEach((sale) => {
-      sale.items
-        .forEach((item) => {
-          const courierQty = courierFulfilledQuantity(item);
-          if (courierQty <= 0) return;
-          const row = ensure(sale.delivererId, item.productId);
-          row.sold += courierQty;
-        });
-    });
-
-  balances.forEach((row) => {
-    row.balance = row.out - row.returned - row.sold;
-  });
-
-  return [...balances.values()].sort((a, b) => a.delivererName.localeCompare(b.delivererName) || a.productName.localeCompare(b.productName));
+  return calculateCourierStockBalances(state);
 }
 
 function courierStockAvailable(delivererId, productId) {
@@ -1670,34 +1631,7 @@ function commitSale(sale) {
 }
 
 function planSaleFulfillment(sale) {
-  const courierUsage = new Map();
-  const warehouseUsage = new Map();
-  const items = [];
-
-  for (const item of sale.items) {
-    const product = byId(state.products, item.productId);
-    if (!product) {
-      return { ok: false, message: `Produto nao encontrado: ${item.productName || "produto selecionado"}.` };
-    }
-
-    const quantity = Number(item.quantity || 0);
-    const key = `${sale.delivererId || ""}|${item.productId}`;
-    const usedCourier = courierUsage.get(key) || 0;
-    const courierAvailable = sale.delivererId ? Math.max(courierStockAvailable(sale.delivererId, item.productId) - usedCourier, 0) : 0;
-    const courierQty = Math.min(quantity, courierAvailable);
-    const warehouseQty = quantity - courierQty;
-    const usedWarehouse = warehouseUsage.get(item.productId) || 0;
-
-    if (warehouseQty > Number(product.stock || 0) - usedWarehouse) {
-      return { ok: false, message: `Estoque insuficiente para ${item.productName || product.name}.` };
-    }
-
-    courierUsage.set(key, usedCourier + courierQty);
-    warehouseUsage.set(item.productId, usedWarehouse + warehouseQty);
-    items.push({ productId: item.productId, courierQty, warehouseQty });
-  }
-
-  return { ok: true, items };
+  return planSaleFulfillmentForState(state, sale);
 }
 
 function replaceSale(oldSale, newSale) {

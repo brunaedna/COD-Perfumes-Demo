@@ -13,6 +13,7 @@ const publicFiles = [
   "supabase-config.js",
   "extension-bridge.js",
   "message-parser.js",
+  "inventory-engine.js",
 ];
 
 await rm(outputDirectory, { recursive: true, force: true });
