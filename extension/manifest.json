@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "COD Perfumes - Captura WhatsApp",
+  "version": "0.2.0",
+  "description": "Captura mensagens de vendas finalizadas no WhatsApp Web e envia para a fila de revisao do ERP COD Perfumes.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://web.whatsapp.com/*",
+    "http://127.0.0.1:4173/*",
+    "http://localhost:4173/*",
+    "file:///*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "COD Perfumes",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content-whatsapp.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://127.0.0.1:4173/*", "http://localhost:4173/*", "file:///*"],
+      "js": ["content-erp-bridge.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

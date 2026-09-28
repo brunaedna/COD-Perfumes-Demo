@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>COD Perfumes</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>COD Perfumes</strong>
+        <span>Captura WhatsApp</span>
+      </header>
+
+      <label class="toggle">
+        <input id="enabled" type="checkbox" />
+        <span>Captura automatica</span>
+      </label>
+
+      <label>
+        URL do ERP
+        <input id="erpUrl" type="url" />
+      </label>
+
+      <label>
+        Grupo autorizado
+        <input id="authorizedGroup" type="text" placeholder="Nome exato do grupo" />
+      </label>
+
+      <label>
+        Palavras-chave obrigatorias
+        <textarea id="keywords" rows="4"></textarea>
+      </label>
+
+      <div class="actions">
+        <button id="save" type="button">Salvar</button>
+        <button id="scan" type="button">Capturar agora</button>
+      </div>
+
+      <p id="status">Pronto.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
