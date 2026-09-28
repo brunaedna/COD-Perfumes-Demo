@@ -57,10 +57,11 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 
 ## Deploy
 
-O projeto pode ser publicado como site estatico no Cloudflare Pages.
+O projeto pode ser publicado como site estatico no Cloudflare. O build gera em `dist/` apenas os arquivos publicos necessarios para executar a aplicacao.
 
 ```powershell
-npx.cmd wrangler pages deploy "." --project-name cod-perfumes-demo
+npm run build
+npx.cmd wrangler pages deploy "dist" --project-name cod-perfumes-demo
 ```
 
 ## Observacao
