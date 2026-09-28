@@ -54,4 +54,4 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 |-- _redirects
 `-- publish-cloudflare.ps1
 ```
-
+## Link do projeto https://cod-perfumes-demo.brunaflow.workers.dev/
