@@ -55,15 +55,3 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 `-- publish-cloudflare.ps1
 ```
 
-## Deploy
-
-O projeto pode ser publicado como site estatico no Cloudflare. O build gera em `dist/` apenas os arquivos publicos necessarios para executar a aplicacao.
-
-```powershell
-npm run build
-npx.cmd wrangler pages deploy "dist" --project-name cod-perfumes-demo
-```
-
-## Observacao
-
-Este projeto e um MVP funcional com foco em regras reais de uma operacao Cash on Delivery. Para uso comercial em escala, recomenda-se evoluir a arquitetura para backend dedicado, rotinas de backup automatizadas e testes automatizados.
