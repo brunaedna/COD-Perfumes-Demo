@@ -10,12 +10,21 @@ import {
   signOutCloud,
   signUpWithEmail,
   storageSummary,
-} from "../../src/storage.js";
+} from "./storage.js";
 import {
   parseIncomingMessage as parseIncomingMessageDraft,
   splitMessages as splitImportedMessages,
-} from "../../src/message-parser.js";
-import { bindExtensionBridge as bindWhatsAppExtensionBridge } from "../../src/extension-bridge.js";
+} from "./message-parser.js";
+import { bindExtensionBridge as bindWhatsAppExtensionBridge } from "./extension-bridge.js";
+import {
+  calculateCourierStockBalances,
+  planSaleFulfillmentForState,
+} from "./inventory-engine.js";
+import {
+  excelSheet,
+  excelTotalRow,
+  excelWorkbookXml,
+} from "./excel-export.js";
 
 const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
@@ -1211,9 +1220,11 @@ function stockTransferRow(entry) {
 }
 
 function actionButtons(type, id) {
+  const copyButton = type === "sale" ? `<button class="secondary small" data-copy-${type}="${id}" type="button">Copiar</button>` : "";
   return `
     <div class="row-actions">
       <button class="secondary small" data-edit-${type}="${id}" type="button">Editar</button>
+      ${copyButton}
       <button class="danger small" data-delete-${type}="${id}" type="button">Excluir</button>
     </div>
   `;
@@ -1265,50 +1276,7 @@ function isDateInside(date, startDate, endDate) {
 }
 
 function courierStockBalances() {
-  const balances = new Map();
-
-  const ensure = (delivererId, productId) => {
-    const key = `${delivererId}|${productId}`;
-    if (!balances.has(key)) {
-      const deliverer = byId(state.people, delivererId);
-      const product = byId(state.products, productId);
-      balances.set(key, {
-        delivererId,
-        productId,
-        delivererName: deliverer?.name || "Entregador removido",
-        productName: product?.name || "Produto removido",
-        out: 0,
-        returned: 0,
-        sold: 0,
-        balance: 0,
-      });
-    }
-    return balances.get(key);
-  };
-
-  state.stockTransfers.forEach((entry) => {
-    const row = ensure(entry.delivererId, entry.productId);
-    if (entry.type === "Devolucao") row.returned += Number(entry.quantity || 0);
-    else row.out += Number(entry.quantity || 0);
-  });
-
-  state.sales
-    .filter((sale) => sale.status !== "Cancelada" && sale.delivererId)
-    .forEach((sale) => {
-      sale.items
-        .forEach((item) => {
-          const courierQty = courierFulfilledQuantity(item);
-          if (courierQty <= 0) return;
-          const row = ensure(sale.delivererId, item.productId);
-          row.sold += courierQty;
-        });
-    });
-
-  balances.forEach((row) => {
-    row.balance = row.out - row.returned - row.sold;
-  });
-
-  return [...balances.values()].sort((a, b) => a.delivererName.localeCompare(b.delivererName) || a.productName.localeCompare(b.productName));
+  return calculateCourierStockBalances(state);
 }
 
 function courierStockAvailable(delivererId, productId) {
@@ -1668,34 +1636,7 @@ function commitSale(sale) {
 }
 
 function planSaleFulfillment(sale) {
-  const courierUsage = new Map();
-  const warehouseUsage = new Map();
-  const items = [];
-
-  for (const item of sale.items) {
-    const product = byId(state.products, item.productId);
-    if (!product) {
-      return { ok: false, message: `Produto nao encontrado: ${item.productName || "produto selecionado"}.` };
-    }
-
-    const quantity = Number(item.quantity || 0);
-    const key = `${sale.delivererId || ""}|${item.productId}`;
-    const usedCourier = courierUsage.get(key) || 0;
-    const courierAvailable = sale.delivererId ? Math.max(courierStockAvailable(sale.delivererId, item.productId) - usedCourier, 0) : 0;
-    const courierQty = Math.min(quantity, courierAvailable);
-    const warehouseQty = quantity - courierQty;
-    const usedWarehouse = warehouseUsage.get(item.productId) || 0;
-
-    if (warehouseQty > Number(product.stock || 0) - usedWarehouse) {
-      return { ok: false, message: `Estoque insuficiente para ${item.productName || product.name}.` };
-    }
-
-    courierUsage.set(key, usedCourier + courierQty);
-    warehouseUsage.set(item.productId, usedWarehouse + warehouseQty);
-    items.push({ productId: item.productId, courierQty, warehouseQty });
-  }
-
-  return { ok: true, items };
+  return planSaleFulfillmentForState(state, sale);
 }
 
 function replaceSale(oldSale, newSale) {
@@ -1857,7 +1798,7 @@ function roundMoney(value) {
 function resetSaleForm() {
   els.saleForm.reset();
   els.saleForm.elements.id.value = "";
-  els.saleForm.elements.date.value = today();
+  els.saleForm.elements.date.value = latestSaleDate() || today();
   els.saleForm.elements.canceledDeliveryFee.value = 0;
   els.saleForm.elements.additionalCommissionTarget.value = "";
   els.saleForm.elements.additionalCommissionAmount.value = 0;
@@ -1871,13 +1812,16 @@ function resetSaleForm() {
   updateSaleTotal();
 }
 
-function editSale(saleId) {
-  const sale = byId(state.sales, saleId);
-  if (!sale) return;
+function latestSaleDate() {
+  return [...state.sales]
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))[0]?.date || "";
+}
+
+function fillSaleFormFromSale(sale, { copy = false } = {}) {
   renderSelects();
   els.saleForm.reset();
-  els.saleForm.elements.id.value = sale.id;
-  els.saleForm.elements.date.value = sale.date || today();
+  els.saleForm.elements.id.value = copy ? "" : sale.id;
+  els.saleForm.elements.date.value = sale.date || latestSaleDate() || today();
   els.saleForm.elements.customer.value = sale.customer || "";
   els.salePayments.innerHTML = "";
   salePaymentEntries(sale).forEach((payment) => addSalePayment(payment));
@@ -1889,14 +1833,24 @@ function editSale(saleId) {
   els.saleForm.elements.additionalCommissionTarget.value = sale.additionalCommissionTarget || "";
   els.saleForm.elements.additionalCommissionAmount.value = Number(sale.additionalCommissionAmount || 0).toFixed(2);
   els.saleItems.innerHTML = "";
-  sale.items.forEach((item) => {
-    addSaleItem(item);
-  });
+  sale.items.forEach((item) => addSaleItem(item));
   if (!els.saleItems.children.length) addSaleItem();
-  els.saleModalTitle.textContent = `Editar venda ${sale.code}`;
-  els.saleSubmitButton.textContent = "Atualizar venda";
+  els.saleModalTitle.textContent = copy ? `Copiar venda ${sale.code}` : `Editar venda ${sale.code}`;
+  els.saleSubmitButton.textContent = copy ? "Registrar copia" : "Atualizar venda";
   updateSaleTotal();
   els.saleModal.showModal();
+}
+
+function editSale(saleId) {
+  const sale = byId(state.sales, saleId);
+  if (!sale) return;
+  fillSaleFormFromSale(sale);
+}
+
+function copySale(saleId) {
+  const sale = byId(state.sales, saleId);
+  if (!sale) return;
+  fillSaleFormFromSale(sale, { copy: true });
 }
 
 function deleteSale(saleId) {
@@ -1921,6 +1875,7 @@ function rememberLastSale(sale) {
   localStorage.setItem(
     lastSaleStorageKey,
     JSON.stringify({
+      date: sale.date,
       paymentMethod: sale.paymentMethod,
       payments: salePaymentEntries(sale).map((payment) => ({ method: payment.method })),
       status: sale.status,
@@ -1940,6 +1895,7 @@ function restoreLastSale() {
     } else {
       addSalePayment({ method: memory.paymentMethod || "PIX" });
     }
+    els.saleForm.elements.date.value = memory.date || latestSaleDate() || today();
     if (memory.status) els.saleForm.elements.status.value = memory.status;
     if (memory.sellerId && byId(state.people, memory.sellerId)) els.saleForm.elements.sellerId.value = memory.sellerId;
     if (memory.delivererId && byId(state.people, memory.delivererId)) els.saleForm.elements.delivererId.value = memory.delivererId;
@@ -3324,26 +3280,7 @@ function exportExcelData() {
     excelSheet("Estoque Entregador", courierStockExportRows()),
     excelSheet("Colaboradores", collaboratorExportRows()),
   ].join("");
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:x="urn:schemas-microsoft-com:office:excel"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Styles>
-  <Style ss:ID="default"><Font ss:FontName="Calibri" ss:Size="11"/></Style>
-  <Style ss:ID="header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F766E" ss:Pattern="Solid"/></Style>
-  <Style ss:ID="money"><NumberFormat ss:Format="R$ #,##0.00"/></Style>
-  <Style ss:ID="integer"><NumberFormat ss:Format="0"/></Style>
-  <Style ss:ID="percent"><NumberFormat ss:Format="0.00%"/></Style>
-  <Style ss:ID="negative"><Font ss:Color="#B42318"/><NumberFormat ss:Format="R$ #,##0.00"/></Style>
-  <Style ss:ID="total"><Font ss:Bold="1"/><Interior ss:Color="#DDEBE8" ss:Pattern="Solid"/></Style>
-  <Style ss:ID="totalMoney"><Font ss:Bold="1"/><Interior ss:Color="#DDEBE8" ss:Pattern="Solid"/><NumberFormat ss:Format="R$ #,##0.00"/></Style>
-  <Style ss:ID="totalInteger"><Font ss:Bold="1"/><Interior ss:Color="#DDEBE8" ss:Pattern="Solid"/><NumberFormat ss:Format="0"/></Style>
-  <Style ss:ID="totalNegative"><Font ss:Bold="1" ss:Color="#B42318"/><Interior ss:Color="#DDEBE8" ss:Pattern="Solid"/><NumberFormat ss:Format="R$ #,##0.00"/></Style>
-</Styles>
-${workbook}
-</Workbook>`;
+  const xml = excelWorkbookXml(workbook);
   const blob = new Blob([xml], { type: "application/vnd.ms-excel;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -3864,102 +3801,6 @@ function collaboratorExportRows() {
   return [header, ...rows, excelTotalRow(header, rows, "TOTAL")];
 }
 
-function excelWorkbookXml(workbook) {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
- xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:x="urn:schemas-microsoft-com:office:excel"
- xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<Styles>
-  <Style ss:ID="default"><Font ss:FontName="Calibri" ss:Size="11"/></Style>
-  <Style ss:ID="header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F766E" ss:Pattern="Solid"/></Style>
-  <Style ss:ID="money"><NumberFormat ss:Format="R$ #,##0.00"/></Style>
-  <Style ss:ID="integer"><NumberFormat ss:Format="0"/></Style>
-  <Style ss:ID="percent"><NumberFormat ss:Format="0.00%"/></Style>
-  <Style ss:ID="negative"><Font ss:Color="#B42318"/><NumberFormat ss:Format="R$ #,##0.00"/></Style>
-  <Style ss:ID="total"><Font ss:Bold="1"/><Interior ss:Color="#DDEBE8" ss:Pattern="Solid"/></Style>
-  <Style ss:ID="totalMoney"><Font ss:Bold="1"/><Interior ss:Color="#DDEBE8" ss:Pattern="Solid"/><NumberFormat ss:Format="R$ #,##0.00"/></Style>
-  <Style ss:ID="totalInteger"><Font ss:Bold="1"/><Interior ss:Color="#DDEBE8" ss:Pattern="Solid"/><NumberFormat ss:Format="0"/></Style>
-  <Style ss:ID="totalNegative"><Font ss:Bold="1" ss:Color="#B42318"/><Interior ss:Color="#DDEBE8" ss:Pattern="Solid"/><NumberFormat ss:Format="R$ #,##0.00"/></Style>
-</Styles>
-${workbook}
-</Workbook>`;
-}
-
-function excelTotalRow(header, rows, label = "TOTAL") {
-  if (!rows.length) return Array.from({ length: header.length }, (_, index) => (index === 0 ? label : ""));
-  return header.map((title, index) => {
-    if (index === 0) return label;
-    if (String(title || "").includes("%")) return "";
-    const values = rows.map((row) => row[index]).filter((value) => typeof value === "number" && Number.isFinite(value));
-    if (!values.length) return "";
-    return roundMoney(values.reduce((sum, value) => sum + value, 0));
-  });
-}
-
-function excelSheet(name, rows) {
-  const safeRows = rows.length ? rows : [["Sem dados"]];
-  const columnCount = Math.max(...safeRows.map((row) => row.length), 1);
-  const rowCount = safeRows.length;
-  return `<Worksheet ss:Name="${excelEscape(name)}">
-<Table>${excelColumns(safeRows)}${safeRows.map((row, index) => excelRow(row, index, safeRows[0])).join("")}</Table>
-<AutoFilter x:Range="R1C1:R${rowCount}C${columnCount}" xmlns="urn:schemas-microsoft-com:office:excel"/>
-<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
-  <FreezePanes/>
-  <FrozenNoSplit/>
-  <SplitHorizontal>1</SplitHorizontal>
-  <TopRowBottomPane>1</TopRowBottomPane>
-  <ActivePane>2</ActivePane>
-</WorksheetOptions>
-</Worksheet>`;
-}
-
-function excelColumns(rows) {
-  const columnCount = Math.max(...rows.map((row) => row.length), 1);
-  return Array.from({ length: columnCount }, (_, index) => {
-    const width = Math.max(
-      80,
-      Math.min(
-        240,
-        rows.reduce((max, row) => Math.max(max, String(row[index] ?? "").length * 7 + 24), 80),
-      ),
-    );
-    return `<Column ss:AutoFitWidth="0" ss:Width="${width}"/>`;
-  }).join("");
-}
-
-function excelRow(row, index, headers = []) {
-  const isTotalRow = row[0] === "TOTAL";
-  return `<Row>${row.map((value, columnIndex) => excelCell(value, index === 0, headers[columnIndex], isTotalRow)).join("")}</Row>`;
-}
-
-function excelCell(value, isHeader = false, header = "", isTotal = false) {
-  const isNumber = typeof value === "number" && Number.isFinite(value);
-  const style = isHeader ? "header" : excelStyleForValue(value, header, isTotal);
-  const type = isNumber ? "Number" : "String";
-  return `<Cell${style ? ` ss:StyleID="${style}"` : ""}><Data ss:Type="${type}">${excelEscape(value)}</Data></Cell>`;
-}
-
-function excelStyleForValue(value, header = "", isTotal = false) {
-  const normalizedHeader = String(header || "").toLowerCase();
-  if (typeof value !== "number" || !Number.isFinite(value)) return isTotal ? "total" : "";
-  if (normalizedHeader.includes("%")) return isTotal ? "total" : "";
-  if (["vendas", "quantidade", "unidades", "estoque", "produtos", "colaboradores", "qtd"].some((term) => normalizedHeader.includes(term))) return isTotal ? "totalInteger" : "integer";
-  if (value < 0) return isTotal ? "totalNegative" : "negative";
-  if (["preco", "custo", "total", "receita", "lucro", "comiss", "taxa", "entrada", "saida", "saldo", "aberto", "pagar", "descontado"].some((term) => normalizedHeader.includes(term))) return isTotal ? "totalMoney" : "money";
-  if (isTotal) return "total";
-  return "";
-}
-
-function excelEscape(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
 function importData(file) {
   if (!file) return;
   const reader = new FileReader();
@@ -4163,6 +4004,9 @@ function bindEvents() {
 
     const editSaleButton = event.target.closest("[data-edit-sale]");
     if (editSaleButton) editSale(editSaleButton.dataset.editSale);
+
+    const copySaleButton = event.target.closest("[data-copy-sale]");
+    if (copySaleButton) copySale(copySaleButton.dataset.copySale);
 
     const deleteSaleButton = event.target.closest("[data-delete-sale]");
     if (deleteSaleButton) deleteSale(deleteSaleButton.dataset.deleteSale);

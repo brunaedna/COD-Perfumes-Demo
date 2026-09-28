@@ -26,7 +26,8 @@ O ERP agora usa uma estrutura mais modular:
 - `src/storage.js`: persistencia local e normalizacao do estado.
 - `src/message-parser.js`: leitura e interpretacao das mensagens de venda.
 - `src/extension-bridge.js`: contrato de entrada para mensagens externas.
-- `assets/js/app.js`: orquestracao da interface, aprovacoes, vendas, estoque e financeiro.
+- `src/app.js`: orquestracao da interface, aprovacoes, vendas, estoque e financeiro.
+- `src/inventory-engine.js`: regras puras de saldo, separacao e disponibilidade de estoque.
 - `assets/css/styles.css`: camada visual da aplicacao.
 
 A extensao foi iniciada na pasta `extension/` com Manifest V3:

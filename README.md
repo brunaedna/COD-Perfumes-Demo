@@ -41,8 +41,6 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 |-- assets/
 |   |-- css/
 |   |   `-- styles.css
-|   `-- js/
-|       `-- app.js
 |-- database/
 |   `-- supabase-schema.sql
 |-- docs/
@@ -50,6 +48,13 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 |   `-- DEPLOY.md
 |-- extension/
 |-- src/
+|   |-- app.js
+|   |-- storage.js
+|   |-- inventory-engine.js
+|   |-- excel-export.js
+|   |-- message-parser.js
+|   |-- extension-bridge.js
+|   `-- supabase-config.js
 |-- index.html
 |-- _redirects
 `-- publish-cloudflare.ps1

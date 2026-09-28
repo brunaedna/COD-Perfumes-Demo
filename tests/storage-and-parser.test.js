@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeStates, normalizeState } from "../storage.js";
-import { normalizeText, parseIncomingMessage, splitMessages } from "../message-parser.js";
+import { mergeStates, normalizeState } from "../src/storage.js";
+import { normalizeText, parseIncomingMessage, splitMessages } from "../src/message-parser.js";
 
 test("remove registros marcados como excluídos durante a normalização", () => {
   const normalized = normalizeState({

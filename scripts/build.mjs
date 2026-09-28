@@ -7,13 +7,7 @@ const outputDirectory = path.join(projectRoot, "dist");
 
 const publicFiles = [
   "index.html",
-  "styles.css",
-  "app.js",
-  "storage.js",
-  "supabase-config.js",
-  "extension-bridge.js",
-  "message-parser.js",
-  "inventory-engine.js",
+  "_redirects",
 ];
 
 await rm(outputDirectory, { recursive: true, force: true });
@@ -24,6 +18,10 @@ for (const file of publicFiles) {
 }
 
 await cp(path.join(projectRoot, "assets"), path.join(outputDirectory, "assets"), {
+  recursive: true,
+});
+
+await cp(path.join(projectRoot, "src"), path.join(outputDirectory, "src"), {
   recursive: true,
 });
 

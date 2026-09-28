@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateCourierStockBalances, planSaleFulfillmentForState } from "../inventory-engine.js";
+import { calculateCourierStockBalances, planSaleFulfillmentForState } from "../src/inventory-engine.js";
 
 function state(overrides = {}) {
   return {
