@@ -49,6 +49,11 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 |-- extension/
 |-- src/
 |   |-- app.js
+|   |-- core/
+|   |   |-- commission-engine.js
+|   |   |-- date-utils.js
+|   |   |-- formatters.js
+|   |   `-- sales-utils.js
 |   |-- storage.js
 |   |-- inventory-engine.js
 |   |-- excel-export.js
@@ -59,4 +64,30 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 |-- _redirects
 `-- publish-cloudflare.ps1
 ```
+
+## Organizacao do codigo
+
+O arquivo `src/app.js` coordena a interface e os eventos do navegador. Regras que nao dependem da tela ficam em modulos pequenos e testaveis:
+
+- `core/commission-engine.js`: calculo de comissoes, venda propria e taxa de entrega cancelada;
+- `core/sales-utils.js`: filtros, ordenacao, resumo por produto e pagamentos;
+- `core/date-utils.js`: periodos e operacoes com datas;
+- `core/formatters.js`: moeda, datas e protecao de texto exibido em HTML;
+- `inventory-engine.js`: saldo e movimentacao de estoque;
+- `storage.js`: persistencia local e sincronizacao com Supabase.
+
+Essa separacao mantem as regras de negocio independentes do DOM, reduz duplicacao e permite validar os fluxos criticos sem abrir o navegador.
+
+## Testes
+
+```bash
+npm ci
+npm test
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+Os testes unitarios cobrem estoque, vendas, pagamentos, comissoes, importacao de mensagens, persistencia e exportacao. O teste de interface cadastra um produto e registra uma venda completa no navegador.
+
 ## Link do projeto https://cod-perfumes-demo.brunaflow.workers.dev/

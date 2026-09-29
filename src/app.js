@@ -25,13 +25,18 @@ import {
   excelTotalRow,
   excelWorkbookXml,
 } from "./excel-export.js";
+import { addDays, isDateInside, monthStart, today, yearStart } from "./core/date-utils.js";
+import { calculateSaleCommissions } from "./core/commission-engine.js";
+import { escapeHtml, formatDate, money, roundMoney, statusPill } from "./core/formatters.js";
+import {
+  cashPaymentAmount,
+  compareSalesByCodeDesc,
+  filterSales,
+  productSalesSummary,
+  salePaymentEntries,
+  salePaymentSummary,
+} from "./core/sales-utils.js";
 
-const currency = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-});
-
-const today = () => new Date().toISOString().slice(0, 10);
 const uid = (prefix) => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
 let state = await loadState();
@@ -283,10 +288,6 @@ function markDeleted(collection, id) {
   state._deleted[collection][id] = new Date().toISOString();
 }
 
-function money(value) {
-  return currency.format(Number(value || 0));
-}
-
 function byId(collection, id) {
   return collection.find((item) => item.id === id);
 }
@@ -518,7 +519,7 @@ function renderBalanceList() {
 
 function renderTopProducts(sales = state.sales.filter((sale) => sale.status !== "Cancelada")) {
   const chart = document.querySelector("#topProductsChart");
-  const rows = productSalesSummary(sales).slice(0, 12);
+  const rows = productSalesSummary(sales, state.products).slice(0, 12);
   if (!rows.length) {
     chart.innerHTML = `<div class="empty">As vendas registradas vao aparecer aqui.</div>`;
     return;
@@ -544,7 +545,7 @@ function renderProductSales() {
   if (els.productSalesEndDate) els.productSalesEndDate.value = productSalesPeriod.end;
 
   const deliveredSales = salesInPeriod(productSalesPeriod.start, productSalesPeriod.end).filter((sale) => sale.status !== "Cancelada");
-  const rows = productSalesSummary(deliveredSales);
+  const rows = productSalesSummary(deliveredSales, state.products);
   const totalQuantity = rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
   const totalRevenue = rows.reduce((sum, row) => sum + Number(row.revenue || 0), 0);
   const totalQuantityElement = document.querySelector("#productSalesTotalQuantity");
@@ -586,32 +587,6 @@ function renderProductSales() {
       </tr>
     `)
     .join("");
-}
-
-function productSalesSummary(sales) {
-  const totals = new Map();
-  sales.forEach((sale) => {
-    sale.items.forEach((item) => {
-      const product = byId(state.products, item.productId);
-      const name = product?.name || item.productName || "Produto removido";
-      const key = item.productId || name;
-      if (!totals.has(key)) {
-        totals.set(key, {
-          name,
-          quantity: 0,
-          revenue: 0,
-          salesCodes: new Set(),
-        });
-      }
-      const row = totals.get(key);
-      row.quantity += Number(item.quantity || 0);
-      row.revenue = roundMoney(row.revenue + Number(item.quantity || 0) * Number(item.unitPrice || 0));
-      row.salesCodes.add(sale.code || sale.id);
-    });
-  });
-  return [...totals.values()]
-    .map((row) => ({ ...row, salesCount: row.salesCodes.size }))
-    .sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue || a.name.localeCompare(b.name));
 }
 
 function renderRecentSales(sales = state.sales) {
@@ -971,7 +946,7 @@ function renderPeople() {
 
 function renderSales() {
   const rows = document.querySelector("#salesRows");
-  const sales = filterSales(salesInPeriod(salesPeriod.start, salesPeriod.end));
+  const sales = filterSales(salesInPeriod(salesPeriod.start, salesPeriod.end), salesFilters);
   els.salesStartDate.value = salesPeriod.start;
   els.salesEndDate.value = salesPeriod.end;
   renderSalesFilterControls();
@@ -979,27 +954,6 @@ function renderSales() {
     ? [...sales].sort(compareSalesByCodeDesc).map(fullSaleRow).join("")
     : `<tr><td colspan="11" class="empty">Registre a primeira venda para iniciar a operacao.</td></tr>`;
   updateBulkDeleteControls("sales");
-}
-
-function filterSales(sales) {
-  if (!salesFilters.type || !salesFilters.value) return sales;
-  if (salesFilters.type === "seller") return sales.filter((sale) => sale.sellerId === salesFilters.value);
-  if (salesFilters.type === "deliverer") return sales.filter((sale) => sale.delivererId === salesFilters.value);
-  if (salesFilters.type === "product") return sales.filter((sale) => sale.items.some((item) => item.productId === salesFilters.value));
-  if (salesFilters.type === "amount") {
-    const minimum = Number(salesFilters.value || 0);
-    return sales.filter((sale) => Number(sale.total || 0) >= minimum);
-  }
-  return sales;
-}
-
-function compareSalesByCodeDesc(a, b) {
-  return saleCodeNumber(b.code) - saleCodeNumber(a.code);
-}
-
-function saleCodeNumber(code) {
-  const number = Number(String(code || "").replace(/\D/g, ""));
-  return Number.isFinite(number) ? number : 0;
 }
 
 function saleRow(sale) {
@@ -1268,13 +1222,6 @@ function campaignsInPeriod(startDate, endDate) {
   return state.campaigns.filter((entry) => isDateInside(entry.date, startDate, endDate));
 }
 
-function isDateInside(date, startDate, endDate) {
-  if (!date) return false;
-  const start = startDate || endDate || "";
-  const end = endDate || startDate || "";
-  return (!start || date >= start) && (!end || date <= end);
-}
-
 function courierStockBalances() {
   return calculateCourierStockBalances(state);
 }
@@ -1324,31 +1271,6 @@ function profitForPeriod(startDate, endDate) {
     profit: roundMoney(operationalProfit),
     realProfit: roundMoney(operationalProfit - campaignCost),
   };
-}
-
-function addDays(dateString, days) {
-  const date = new Date(`${dateString}T00:00:00`);
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function monthStart(dateString) {
-  return `${dateString.slice(0, 7)}-01`;
-}
-
-function yearStart(dateString) {
-  return `${dateString.slice(0, 4)}-01-01`;
-}
-
-function statusPill(status) {
-  const className = status === "Entregue" ? "good" : status === "Cancelada" ? "bad" : "warn";
-  return `<span class="pill ${className}">${escapeHtml(status)}</span>`;
-}
-
-function formatDate(date) {
-  if (!date) return "-";
-  const [year, month, day] = date.split("-");
-  return `${day}/${month}/${year}`;
 }
 
 function addSaleItem(itemOrProductId = "") {
@@ -1426,37 +1348,19 @@ function syncSinglePaymentAmount(total) {
 function updateCommissionPreview(total = getSaleItems().reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)) {
   const seller = byId(state.people, els.saleForm.elements.sellerId.value);
   const deliverer = byId(state.people, els.saleForm.elements.delivererId.value);
-  const status = els.saleForm.elements.status.value;
-  const isCanceled = status === "Cancelada";
-  const isOwnDeliverySale = seller && deliverer && seller.id === deliverer.id;
-  const canceledDeliveryFee = roundMoney(els.saleForm.elements.canceledDeliveryFee.value);
-  const additionalTarget = els.saleForm.elements.additionalCommissionTarget.value;
-  const additionalAmount = roundMoney(els.saleForm.elements.additionalCommissionAmount.value);
+  const commissions = calculateSaleCommissions({
+    total,
+    seller,
+    deliverer,
+    status: els.saleForm.elements.status.value,
+    canceledDeliveryFee: els.saleForm.elements.canceledDeliveryFee.value,
+    additionalTarget: els.saleForm.elements.additionalCommissionTarget.value,
+    additionalAmount: els.saleForm.elements.additionalCommissionAmount.value,
+  });
 
-  let sellerCommission = 0;
-  let delivererCommission = 0;
-
-  if (isCanceled) {
-    delivererCommission = deliverer ? canceledDeliveryFee : 0;
-  } else {
-    if (seller && isOwnDeliverySale && Number(seller.ownSalesCommissionRate) > 0) {
-      sellerCommission = roundMoney(total * (Number(seller.ownSalesCommissionRate) / 100));
-    } else if (seller && !isOwnDeliverySale && Number(seller.salesCommissionRate) > 0) {
-      sellerCommission = roundMoney(total * (Number(seller.salesCommissionRate) / 100));
-    }
-    if (deliverer && Number(deliverer.deliveryCommission) > 0) {
-      delivererCommission = roundMoney(deliverer.deliveryCommission);
-    }
-  }
-
-  if (additionalAmount > 0) {
-    if (additionalTarget === "seller" && seller) sellerCommission += additionalAmount;
-    if (additionalTarget === "deliverer" && deliverer) delivererCommission += additionalAmount;
-  }
-
-  els.sellerCommissionPreview.textContent = money(sellerCommission);
-  els.delivererCommissionPreview.textContent = money(delivererCommission);
-  els.totalCommissionPreview.textContent = money(sellerCommission + delivererCommission);
+  els.sellerCommissionPreview.textContent = money(commissions.sellerCommission);
+  els.delivererCommissionPreview.textContent = money(commissions.delivererCommission);
+  els.totalCommissionPreview.textContent = money(commissions.totalCommission);
 }
 
 function getSaleItems() {
@@ -1492,32 +1396,6 @@ function getSalePayments(total = 0) {
   }
 
   return payments;
-}
-
-function salePaymentEntries(sale) {
-  if (Array.isArray(sale.payments) && sale.payments.length) {
-    return sale.payments.map((payment) => ({
-      method: payment.method || payment.paymentMethod || "Nao informado",
-      amount: roundMoney(payment.amount),
-    }));
-  }
-
-  const method = sale.paymentMethod || "Nao informado";
-  const amount = roundMoney(sale.total);
-  return amount > 0 ? [{ method, amount }] : [];
-}
-
-function salePaymentSummary(sale) {
-  const payments = salePaymentEntries(sale);
-  if (!payments.length) return sale.paymentMethod || "Nao informado";
-  if (payments.length === 1) return payments[0].method;
-  return payments.map((payment) => `${payment.method} ${money(payment.amount)}`).join(" + ");
-}
-
-function cashPaymentAmount(sale) {
-  return salePaymentEntries(sale)
-    .filter((payment) => isCashPaymentMethod(payment.method))
-    .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
 }
 
 function handleSaleSubmit(event) {
@@ -1686,9 +1564,14 @@ function nextSaleCode() {
 function createCommissionEntries(sale) {
   const seller = byId(state.people, sale.sellerId);
   const deliverer = byId(state.people, sale.delivererId);
-  const isOwnDeliverySale = seller && deliverer && seller.id === deliverer.id;
+  const commissions = calculateSaleCommissions({
+    total: sale.total,
+    seller,
+    deliverer,
+    status: sale.status,
+  });
 
-  if (seller && isOwnDeliverySale && Number(seller.ownSalesCommissionRate) > 0) {
+  if (seller && commissions.isOwnDeliverySale && commissions.sellerBaseCommission > 0) {
     state.ledger.push({
       id: uid("ledger"),
       date: sale.date,
@@ -1696,10 +1579,10 @@ function createCommissionEntries(sale) {
       type: "Comissao venda propria",
       source: sale.code,
       description: `${seller.ownSalesCommissionRate}% sobre venda propria ${sale.code}`,
-      amount: roundMoney(sale.total * (Number(seller.ownSalesCommissionRate) / 100)),
+      amount: commissions.sellerBaseCommission,
       direction: "in",
     });
-  } else if (seller && !isOwnDeliverySale && Number(seller.salesCommissionRate) > 0) {
+  } else if (seller && !commissions.isOwnDeliverySale && commissions.sellerBaseCommission > 0) {
     state.ledger.push({
       id: uid("ledger"),
       date: sale.date,
@@ -1707,12 +1590,12 @@ function createCommissionEntries(sale) {
       type: "Comissao vendedor",
       source: sale.code,
       description: `${seller.salesCommissionRate}% sobre venda ${sale.code}`,
-      amount: roundMoney(sale.total * (Number(seller.salesCommissionRate) / 100)),
+      amount: commissions.sellerBaseCommission,
       direction: "in",
     });
   }
 
-  if (deliverer && Number(deliverer.deliveryCommission) > 0) {
+  if (deliverer && commissions.delivererBaseCommission > 0) {
     state.ledger.push({
       id: uid("ledger"),
       date: sale.date,
@@ -1720,7 +1603,7 @@ function createCommissionEntries(sale) {
       type: "Comissao entrega",
       source: sale.code,
       description: `Entrega da venda ${sale.code}`,
-      amount: roundMoney(Number(deliverer.deliveryCommission)),
+      amount: commissions.delivererBaseCommission,
       direction: "in",
     });
   }
@@ -1781,18 +1664,6 @@ function createCanceledDeliveryFee(sale) {
     amount: fee,
     direction: "in",
   });
-}
-
-function isCashPaymentMethod(paymentMethod) {
-  return String(paymentMethod || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .includes("dinheiro");
-}
-
-function roundMoney(value) {
-  return Math.round(Number(value || 0) * 100) / 100;
 }
 
 function resetSaleForm() {
@@ -3961,15 +3832,6 @@ function clearData() {
   resetSaleForm();
   render();
   showToast("Dados limpos.");
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
 }
 
 function bindEvents() {

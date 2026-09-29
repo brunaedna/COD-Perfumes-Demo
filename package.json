@@ -1,10 +1,14 @@
 {
-  "name": "cod-perfumes-demo",
+  "name": "cod-perfumes-erp",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }
