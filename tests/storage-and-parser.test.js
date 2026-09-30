@@ -28,6 +28,16 @@ test("mescla estado da nuvem e local sem ressuscitar exclusões", () => {
   assert.equal(merged._meta.revision, 3);
 });
 
+test("mescla auditoria local e remota sem duplicar eventos", () => {
+  const sharedEvent = { id: "audit-1", occurredAt: "2026-09-28T09:00:00.000Z", action: "sale.created" };
+  const merged = mergeStates(
+    { audit: [sharedEvent] },
+    { audit: [sharedEvent, { id: "audit-2", occurredAt: "2026-09-29T09:00:00.000Z", action: "sale.updated" }] },
+  );
+
+  assert.deepEqual(merged.audit.map((event) => event.id), ["audit-1", "audit-2"]);
+});
+
 test("interpreta uma mensagem de venda recebida", () => {
   const result = parseIncomingMessage(
     "Cliente: Ana\nTelefone: 11999998888\nProduto: Essência Floral\nQtd: 2\nValor: R$ 89,90\nPagamento: PIX",

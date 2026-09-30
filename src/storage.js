@@ -229,7 +229,7 @@ export function normalizeState(nextState) {
     stockEntries: removeDeletedRows(source.stockEntries || [], deleted.stockEntries),
     campaigns: removeDeletedRows(source.campaigns || [], deleted.campaigns),
     inbox: removeDeletedRows(source.inbox || [], deleted.inbox),
-    audit: source.audit || [],
+    audit: Array.isArray(source.audit) ? source.audit.slice(-200) : [],
   };
 }
 
@@ -249,7 +249,7 @@ export function mergeStates(primaryState, secondaryState) {
     stockEntries: mergeById(primary.stockEntries, secondary.stockEntries, deleted.stockEntries),
     campaigns: mergeById(primary.campaigns, secondary.campaigns, deleted.campaigns),
     inbox: mergeById(primary.inbox, secondary.inbox, deleted.inbox),
-    audit: [...(primary.audit || []), ...(secondary.audit || [])].slice(-200),
+    audit: mergeAuditEvents(primary.audit, secondary.audit),
   });
 
   merged._meta = {
@@ -289,6 +289,17 @@ function mergeById(primaryRows = [], secondaryRows = [], deletedIds = {}) {
     rows.set(row.id, { ...rows.get(row.id), ...row });
   });
   return [...rows.values()].filter((row) => !deletedIds[row.id]);
+}
+
+function mergeAuditEvents(primaryEvents = [], secondaryEvents = []) {
+  const events = new Map();
+  [...primaryEvents, ...secondaryEvents].forEach((event) => {
+    if (!event?.id) return;
+    events.set(event.id, { ...events.get(event.id), ...event });
+  });
+  return [...events.values()]
+    .sort((first, second) => String(first.occurredAt || "").localeCompare(String(second.occurredAt || "")))
+    .slice(-200);
 }
 
 function latestDate(first = "", second = "") {

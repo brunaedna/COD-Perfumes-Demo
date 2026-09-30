@@ -19,6 +19,8 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 - Conta corrente por colaborador.
 - Controle de comissoes, vales, pagamentos e saldos.
 - Registro de vendas canceladas com taxa de entrega.
+- Operações transacionais para criar, editar e excluir vendas com rollback automático.
+- Trilha de auditoria técnica para alterações no ciclo de vida das vendas.
 - Controle de campanhas para calculo de lucro real.
 - Relatorios e exportacoes em Excel e TXT.
 - Estrutura preparada para integracao com extensao do WhatsApp Web.
@@ -53,6 +55,7 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 |   |   |-- commission-engine.js
 |   |   |-- date-utils.js
 |   |   |-- formatters.js
+|   |   |-- sale-service.js
 |   |   `-- sales-utils.js
 |   |-- storage.js
 |   |-- inventory-engine.js
@@ -70,6 +73,7 @@ O sistema foi criado para uma operacao real de COD, onde vendedores e entregador
 O arquivo `src/app.js` coordena a interface e os eventos do navegador. Regras que nao dependem da tela ficam em modulos pequenos e testaveis:
 
 - `core/commission-engine.js`: calculo de comissoes, venda propria e taxa de entrega cancelada;
+- `core/sale-service.js`: transacao de venda, estoque, conta corrente, rollback e auditoria;
 - `core/sales-utils.js`: filtros, ordenacao, resumo por produto e pagamentos;
 - `core/date-utils.js`: periodos e operacoes com datas;
 - `core/formatters.js`: moeda, datas e protecao de texto exibido em HTML;
@@ -77,6 +81,8 @@ O arquivo `src/app.js` coordena a interface e os eventos do navegador. Regras qu
 - `storage.js`: persistencia local e sincronizacao com Supabase.
 
 Essa separacao mantem as regras de negocio independentes do DOM, reduz duplicacao e permite validar os fluxos criticos sem abrir o navegador.
+
+O servico de vendas recebe suas dependencias, como geracao de identificadores e relogio, por injecao. Isso permite testes deterministas e mantem a interface desacoplada das regras de estoque e financeiras. Em uma edicao invalida, o estado anterior e restaurado integralmente para evitar saldos parciais.
 
 ## Testes
 
@@ -88,6 +94,6 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Os testes unitarios cobrem estoque, vendas, pagamentos, comissoes, importacao de mensagens, persistencia e exportacao. O teste de interface cadastra um produto e registra uma venda completa no navegador.
+Os testes unitarios cobrem estoque, transacoes de venda, rollback, auditoria, pagamentos, comissoes, importacao de mensagens, persistencia e exportacao. O teste de interface cadastra um produto e registra uma venda completa no navegador.
 
 ## Link do projeto https://cod-perfumes-demo.brunaflow.workers.dev/

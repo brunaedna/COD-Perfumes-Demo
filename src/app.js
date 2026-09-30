@@ -16,10 +16,7 @@ import {
   splitMessages as splitImportedMessages,
 } from "./message-parser.js";
 import { bindExtensionBridge as bindWhatsAppExtensionBridge } from "./extension-bridge.js";
-import {
-  calculateCourierStockBalances,
-  planSaleFulfillmentForState,
-} from "./inventory-engine.js";
+import { calculateCourierStockBalances } from "./inventory-engine.js";
 import {
   excelSheet,
   excelTotalRow,
@@ -29,7 +26,11 @@ import { addDays, isDateInside, monthStart, today, yearStart } from "./core/date
 import { calculateSaleCommissions } from "./core/commission-engine.js";
 import { escapeHtml, formatDate, money, roundMoney, statusPill } from "./core/formatters.js";
 import {
-  cashPaymentAmount,
+  courierFulfilledQuantity,
+  createSaleService,
+  warehouseFulfilledQuantity,
+} from "./core/sale-service.js";
+import {
   compareSalesByCodeDesc,
   filterSales,
   productSalesSummary,
@@ -38,6 +39,7 @@ import {
 } from "./core/sales-utils.js";
 
 const uid = (prefix) => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+const saleService = createSaleService({ idFactory: uid });
 
 let state = await loadState();
 let dashboardPeriod = {
@@ -1450,7 +1452,9 @@ function handleSaleSubmit(event) {
     total,
   };
 
-  const result = editingSale ? replaceSale(editingSale, sale) : commitSale(sale);
+  const result = editingSale
+    ? saleService.replace(state, editingSale, sale)
+    : saleService.commit(state, sale);
   if (!result.ok) {
     showToast(result.message);
     return;
@@ -1464,206 +1468,12 @@ function handleSaleSubmit(event) {
   showToast(editingSale ? "Venda atualizada e saldos recalculados." : sale.status === "Cancelada" ? "Venda cancelada registrada com taxa do entregador." : "Venda registrada e estoque atualizado.");
 }
 
-function commitSale(sale) {
-  if (sale.status !== "Cancelada") {
-    const plan = planSaleFulfillment(sale);
-    if (!plan.ok) {
-      return { ok: false, message: plan.message };
-    }
-
-    const warehouseUsage = new Map();
-    plan.items.forEach((itemPlan) => {
-      warehouseUsage.set(itemPlan.productId, (warehouseUsage.get(itemPlan.productId) || 0) + itemPlan.warehouseQty);
-    });
-
-    const shortage = sale.items.find((item) => {
-      const product = byId(state.products, item.productId);
-      if (!product) return true;
-      return Number(warehouseUsage.get(item.productId) || 0) > Number(product.stock || 0);
-    });
-
-    if (shortage) {
-      return { ok: false, message: `Estoque insuficiente para ${shortage.productName || "produto selecionado"}.` };
-    }
-
-    plan.items.forEach((itemPlan, index) => {
-      const item = sale.items[index];
-      const product = byId(state.products, item.productId);
-      item.fulfillmentDelivererQty = itemPlan.courierQty;
-      item.fulfillmentWarehouseQty = itemPlan.warehouseQty;
-      if (itemPlan.courierQty === Number(item.quantity || 0)) {
-        item.fulfillment = "deliverer";
-      } else if (itemPlan.warehouseQty === Number(item.quantity || 0)) {
-        item.fulfillment = "warehouse";
-      } else {
-        item.fulfillment = "mixed";
-      }
-      if (itemPlan.warehouseQty > 0) {
-        product.stock -= itemPlan.warehouseQty;
-      }
-    });
-    createCommissionEntries(sale);
-    createCashPaymentAdvance(sale);
-  } else {
-    createCanceledDeliveryFee(sale);
-    createAdditionalCommissionEntry(sale);
-  }
-
-  state.sales.push(sale);
-  return { ok: true };
-}
-
-function planSaleFulfillment(sale) {
-  return planSaleFulfillmentForState(state, sale);
-}
-
-function replaceSale(oldSale, newSale) {
-  removeSaleEffects(oldSale);
-  state.sales = state.sales.filter((sale) => sale.id !== oldSale.id);
-  const result = commitSale(newSale);
-  if (!result.ok) {
-    commitSale(oldSale);
-  }
-  return result;
-}
-
-function removeSaleEffects(sale) {
-  if (sale.status !== "Cancelada") {
-    sale.items.forEach((item) => {
-      const warehouseQty = warehouseFulfilledQuantity(item);
-      if (warehouseQty <= 0) return;
-      const product = byId(state.products, item.productId);
-      if (product) product.stock += warehouseQty;
-    });
-  }
-  state.ledger
-    .filter((entry) => entry.source === sale.code)
-    .forEach((entry) => markDeleted("ledger", entry.id));
-  state.ledger = state.ledger.filter((entry) => entry.source !== sale.code);
-}
-
-function courierFulfilledQuantity(item) {
-  if (Number.isFinite(Number(item.fulfillmentDelivererQty))) return Number(item.fulfillmentDelivererQty || 0);
-  return item.fulfillment === "deliverer" ? Number(item.quantity || 0) : 0;
-}
-
-function warehouseFulfilledQuantity(item) {
-  if (Number.isFinite(Number(item.fulfillmentWarehouseQty))) return Number(item.fulfillmentWarehouseQty || 0);
-  if (item.fulfillment === "deliverer") return 0;
-  return Number(item.quantity || 0);
-}
-
 function nextSaleCode() {
   const maxNumber = state.sales.reduce((max, sale) => {
     const number = Number(String(sale.code || "").replace(/\D/g, ""));
     return Number.isFinite(number) ? Math.max(max, number) : max;
   }, 0);
   return `V${String(maxNumber + 1).padStart(4, "0")}`;
-}
-
-function createCommissionEntries(sale) {
-  const seller = byId(state.people, sale.sellerId);
-  const deliverer = byId(state.people, sale.delivererId);
-  const commissions = calculateSaleCommissions({
-    total: sale.total,
-    seller,
-    deliverer,
-    status: sale.status,
-  });
-
-  if (seller && commissions.isOwnDeliverySale && commissions.sellerBaseCommission > 0) {
-    state.ledger.push({
-      id: uid("ledger"),
-      date: sale.date,
-      personId: seller.id,
-      type: "Comissao venda propria",
-      source: sale.code,
-      description: `${seller.ownSalesCommissionRate}% sobre venda propria ${sale.code}`,
-      amount: commissions.sellerBaseCommission,
-      direction: "in",
-    });
-  } else if (seller && !commissions.isOwnDeliverySale && commissions.sellerBaseCommission > 0) {
-    state.ledger.push({
-      id: uid("ledger"),
-      date: sale.date,
-      personId: seller.id,
-      type: "Comissao vendedor",
-      source: sale.code,
-      description: `${seller.salesCommissionRate}% sobre venda ${sale.code}`,
-      amount: commissions.sellerBaseCommission,
-      direction: "in",
-    });
-  }
-
-  if (deliverer && commissions.delivererBaseCommission > 0) {
-    state.ledger.push({
-      id: uid("ledger"),
-      date: sale.date,
-      personId: deliverer.id,
-      type: "Comissao entrega",
-      source: sale.code,
-      description: `Entrega da venda ${sale.code}`,
-      amount: commissions.delivererBaseCommission,
-      direction: "in",
-    });
-  }
-
-  createAdditionalCommissionEntry(sale);
-}
-
-function createAdditionalCommissionEntry(sale) {
-  const target = sale.additionalCommissionTarget;
-  const amount = roundMoney(sale.additionalCommissionAmount);
-  if (!target || amount <= 0) return;
-
-  const personId = target === "seller" ? sale.sellerId : sale.delivererId;
-  const person = byId(state.people, personId);
-  if (!person) return;
-
-  state.ledger.push({
-    id: uid("ledger"),
-    date: sale.date,
-    personId: person.id,
-    type: target === "seller" ? "Comissao adicional vendedor" : "Comissao adicional entregador",
-    source: sale.code,
-    description: `Comissao adicional da venda ${sale.code}`,
-    amount,
-    direction: "in",
-  });
-}
-
-function createCashPaymentAdvance(sale) {
-  const deliverer = byId(state.people, sale.delivererId);
-  const amount = roundMoney(cashPaymentAmount(sale));
-  if (!deliverer || amount <= 0) return;
-
-  state.ledger.push({
-    id: uid("ledger"),
-    date: sale.date,
-    personId: deliverer.id,
-    type: "Vale",
-    source: sale.code,
-    description: `Dinheiro recebido na entrega da venda ${sale.code}`,
-    amount,
-    direction: "out",
-  });
-}
-
-function createCanceledDeliveryFee(sale) {
-  const deliverer = byId(state.people, sale.delivererId);
-  const fee = roundMoney(sale.canceledDeliveryFee);
-  if (!deliverer || fee <= 0) return;
-
-  state.ledger.push({
-    id: uid("ledger"),
-    date: sale.date,
-    personId: deliverer.id,
-    type: "Taxa entrega cancelada",
-    source: sale.code,
-    description: `Taxa por tentativa de entrega cancelada ${sale.code}`,
-    amount: fee,
-    direction: "in",
-  });
 }
 
 function resetSaleForm() {
@@ -1729,9 +1539,7 @@ function deleteSale(saleId) {
   if (!sale) return;
   if (!confirm(`Excluir a venda ${sale.code}? O estoque e as comissoes dessa venda serao revertidos.`)) return;
   createAutomaticBackup(`Antes de excluir venda ${sale.code}`);
-  removeSaleEffects(sale);
-  markDeleted("sales", sale.id);
-  state.sales = state.sales.filter((entry) => entry.id !== sale.id);
+  saleService.remove(state, sale);
   const inboxEntry = state.inbox.find((entry) => entry.saleId === sale.id || entry.id === sale.sourceInboxId);
   if (inboxEntry && inboxEntry.status === "Aprovada") {
     inboxEntry.status = "Pendente";
@@ -2339,15 +2147,13 @@ function deleteSelectedSales(ids) {
   if (!confirm(`Excluir ${sales.length} venda(s)? Receita, estoque, comissoes, conta corrente e demais dados vinculados serao recalculados.`)) return;
   createAutomaticBackup(`Antes de excluir ${sales.length} vendas`);
   sales.forEach((sale) => {
-    removeSaleEffects(sale);
-    markDeleted("sales", sale.id);
+    saleService.remove(state, sale);
     const inboxEntry = state.inbox.find((entry) => entry.saleId === sale.id || entry.id === sale.sourceInboxId);
     if (inboxEntry && inboxEntry.status === "Aprovada") {
       inboxEntry.status = "Pendente";
       delete inboxEntry.saleId;
     }
   });
-  state.sales = state.sales.filter((sale) => !selected.has(sale.id));
   resetSaleForm();
   saveState({ force: true });
   render();
@@ -3006,7 +2812,7 @@ function approveInboxEntry(entry, card) {
     total,
   };
 
-  const result = commitSale(sale);
+  const result = saleService.commit(state, sale);
   if (!result.ok) {
     showToast(result.message);
     return;
@@ -3074,11 +2880,7 @@ function seedExamples() {
     total: products[0].price + products[2].price,
   };
 
-  exampleSale.items.forEach((item) => {
-    byId(state.products, item.productId).stock -= item.quantity;
-  });
-  state.sales.push(exampleSale);
-  createCommissionEntries(exampleSale);
+  saleService.commit(state, exampleSale);
   state.ledger.push({
     id: uid("ledger"),
     date: today(),
